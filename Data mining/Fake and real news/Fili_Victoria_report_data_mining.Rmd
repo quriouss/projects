@@ -1,0 +1,265 @@
+---
+title: | 
+  ![](C:\Users\Victoria\Documents\mining\logo.png){width=1in} 
+  "Fake and real news" 
+
+author: "Φίλη Βικτώρια, Α.Μ.:01588"
+date: 'Διδάσκων: Σωτήριος Τασουλής'
+output: word_document
+bibliography: references.bib
+nocite: '@*'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+<h2>Περίληψη</h2>
+Στα πλαίσια της παρούσας εργασίας, επιχειρήθηκε ο περιορισμός του φαινομένου της παραπληροφόρησης με τη χρήση μεθόδων εξόρυξης δεδομένων. Πιο συγκεκριμένα,η εργασία αυτή στοχεύει στην ανάπτυξη ενός μοντέλου για την ταξινόμηση ενός άρθρου ειδήσεων ως «Πραγματικό» ή «Ψεύτικο» με βάση το κείμενο του. Εφαρμόστηκαν, λοιπόν, αλγόριθμοι επεξεργασίας μεγάλου όγκου δεδομένων για την εύρεση των λέξεων που φαίνεται να εμφανίζονται με μεγαλύτερη συχνότητα σε ψευδείς ειδήσεις. Η γραφική αναπαράσταση των δεδομένων έδειξε ότι την περίοδο των εκλογών το έτος 2016 στην Αμερική σημειώθηκε η μεγαλύτερη διάρρευση ψευδών ειδήσεων. Η διαδικασία της πρόγνωσης εφαρμόστηκε από δύο πολύ γνωστούς ταξινομητές, τον Naive Bayes και τον Random Forest, οι οποίοι κατόρθωσαν ποσοστό ακρίβειας 84,6% και 95,8% αντίστοιχα.
+
+<h2>Πρόβλημα</h2>
+Ο τεράστιος όγκος πληροφόρησης που παρέχεται καθημερινά από διάφορες πηγές συνδέεται άμεσα με την έξαρση του φαινομένου της παραπληροφόρησης.Η πληθώρα ψευδών ειδήσεων καθιστά όλο και πιο δύσκολη την αναγνώριση τους και τη διάκριση τους από τις αληθείς ειδήσεις. Ορισμένες οργανώσεις χρησιμοποιούν τα μέσα κοινωνικής δικτύωσης για να διαδώσουν ψευδείς πληροφορίες, ισχυριζόμενες ότι είναι ορθές. Στόχος, λοιπόν, της εργασίας αποτελεί ο περιορισμός του φαινομένου. 
+
+```{r libraries}
+library(lubridate)
+library(stringr)
+library(dplyr)
+library(tm)
+library(SnowballC)
+library(ggplot2)
+library(caret)
+library(pROC)
+library(corrplot)
+library(caTools)
+library(e1071)
+library(pROC)
+library(ROCR)
+library(randomForest)
+```
+<h2>Φόρτωση Δεδομένων (Data Loading)</h2>
+Το σύνολο δεδομένων αποτελείται από 23.481 άρθρα ψευδών ειδήσεων και από 21.417 άρθρα αληθών ειδήσεων, συγκεκριμένα, οι ψευδείς και οι αληθείς ειδήσεις βρίσκονται σε δύο διαφορετικά αρχεία με κατάληξη .csv. Και τα δύο αρχεία περιλαμβάνουν τον τίτλο, το κείμενο, το θέμα και την ημερομηνία δημοσίευσης του κάθε άρθρου. Με μία γρήγορη ματιά στα δεδομένα, μπορεί κανείς να διαπιστώσει ότι είναι απαραίτητο να επέλθουν σε μία προεπεξεργασία προτού δοθούν ως είσοδο σε οποιονδήποτε ταξινομητή. 
+Πηγή: https://www.kaggle.com/clmentbisaillon/fake-and-real-news-dataset
+```{r load data}
+# Read in files
+real <- read.csv("True.csv", encoding = "UTF-8", as.is = TRUE)
+nrow(real)
+glimpse(real)
+fake <- read.csv("Fake.csv", encoding = "UTF-8", as.is = TRUE)
+nrow(fake)
+glimpse(fake)
+
+```
+```{r data}
+# Add category
+real$category <- factor("real")
+fake$category <- factor("fake")
+```
+```{r merge files}
+# Merge files
+data <- rbind(real, fake)
+
+rm(real)
+rm(fake)
+
+```
+```{r visualization}
+# Visualize data grouped by subject
+data %>%
+  group_by(subject) %>%
+  count(sort = TRUE) %>%
+  rename(freq = n) %>%
+  ggplot(aes(x = reorder(subject, -freq), y = freq)) + 
+  ggtitle("Data grouped by subject") +
+  geom_bar(stat = 'identity', fill = 'skyblue') +
+  theme_classic() +
+  xlab('Subject') +
+  ylab('frequency') +
+  geom_text(aes(label = freq), vjust = 1.2, fontface = 'bold') +
+  theme(axis.title = element_text(face = 'bold', size = 15),
+        axis.text = element_text(size = 13, angle = 90))
+```
+<h2>Προεπεξεργασία Δεδομένων (Data preprocessing)</h2>
+Η προεπεξεργασία των δεδομένων αποτελεί πολύ σημαντικό παράγοντα για την εξαγωγή ορθών συμπερασμάτων. Ύστερα από τη σύμπτιξη των δύο αρχείων με τις ψευδείς και αληθείς ειδήσεις προστέθηκε μία νέα στήλη η οποία περιλαμβάνει την κατηγορία στην οποία ανήκει κάθε είδηση. Στη συνέχεια, το σύνολο δεδομένων εισήλθε σε διαδικασία προεπεξεργασίας, συγκεκριμένα έγινε αντιμετώπιση ελλειπών τιμών, αφαίρεση κενών και διαγραφή διπλοτύπων.
+
+```{r preprocess data}
+# Convert date from factor to date
+data$date <- lubridate::parse_date_time(data$date, c('%B %d, %Y', '%d-%b-%y'), quiet=TRUE)
+data <- na.omit(data)
+nrow(data)
+
+# There are some articles where the text is blank.
+# Remove them
+data$title <- trimws(data$title)
+data$text <- trimws(data$text)
+data<-data[!(data$title=="" | data$text==""),]
+nrow(data)
+
+# Remove consecutive blank spaces
+data$title <- str_replace_all(data$title, "\\s{2,}+", " ")
+data$text <- str_replace_all(data$text, "\\s{2,}+", " ")
+
+# Remove duplicates
+data <- data[!duplicated(data$text),]
+
+# Sort by time
+data <- data[order(data$date),]
+
+# Add month and year variables
+data$year <- factor(substring(data$date,1,4))
+data$month <- factor(substring(data$date,6,7))
+nrow(data)
+
+data <- data[,c("text", "category", "date", "month","year")]
+
+```
+Ύστερα από μελέτη του συνόλου δεδομένων εντοπίστηκαν και άλλα στοιχεία που δημιουργούν θόρυβο στα δεδομένα και χρειάζεται να αφαιρεθούν. Τα στοιχεία αυτά αφαιρέθηκαν από τα άρθρα που έχουν χαρακτηριστεί ως ψευδή. Συγκεκριμένα έγιναν τα εξής βήματα προεπεξεργασίας : μετατροπή των γραμμάτων σε πεζά, αφαίρεση αριθμών, αφαίρεση σημείων στίξεως, εύρεση και αφαίρεση των 'κοινών λέξεων (and, is, the)' και αφαίρεση των όρων που δεν εντοπίστηκαν στο κείμενο καμία φορά.
+```{r text mining}
+############# Text Mining #############
+fake_news <- data[data$category == "fake", 1]
+
+# Data cleaning
+doc <- Corpus(VectorSource(fake_news))
+doc <- tm_map(doc, content_transformer(tolower))
+doc <- tm_map(doc, stripWhitespace)
+doc <- tm_map(doc, removeNumbers)
+doc <- tm_map(doc, removePunctuation)
+doc <- tm_map(doc, content_transformer(str_remove_all), "[[:punct:]]")
+doc <- tm_map(doc, removeWords, stopwords("english"))
+dtm <- TermDocumentMatrix(doc)
+dtm.clean <- removeSparseTerms(dtm, sparse = 0.99)
+m <- as.matrix(dtm.clean)
+v <- sort(rowSums(m),decreasing=TRUE)
+```
+Έπειτα από την ολοκλήρωση της προεπεξεργασίας των δεδομένων επειχηρήθηκε η εύρεση των 100 λέξεων που εμφανίζονται συχνότερα στο σύνολο δεδομένων. Η πρώτη λέξη που εμφανίζεται με τη μεγαλύτερη συχνότητα είναι **trump** και η δεύτερη στη σειρά **said**. Πρόκειται για ένα πολύ λογικό αποτέλεσμα αν σκεφτεί κανείς αυτό που αναφέρθηκε και προγενέστερα για την περίοδο των εκλογών. 
+<center>
+
+![Word cloud](C:\Users\Victoria\Desktop\wordcloud.png "Word Cloud")
+</center>
+
+Πηγή: https://github.com/iscarff123/FakeRealNewsClassification
+```{r top100words}
+# Keep the most popular words
+popular_words <- data.frame(word = names(v),freq=v)
+glimpse(popular_words)
+
+rm(doc)
+rm(dtm)
+rm(dtm.clean)
+rm(m)
+rm(v)
+
+popularWords2 <- aggregate(popular_words$freq,
+                           by = list(words = popular_words$word),
+                           FUN = sum)
+popularWords2Sorted <- popularWords2[order(popularWords2$x, decreasing = TRUE),]
+
+Top100Words <- as.character(popularWords2Sorted$words[1:100])
+```
+```{r finalize data}
+# Finalize data
+data$text <- str_to_lower(data$text)
+data <- cbind(data, sapply(Top100Words, function(x) str_count(data$text, paste0("\\b", x, "\\b"))))
+data <- data[,-1]
+
+dim(data)
+```
+<h2>Διερευνητική Ανάλυση Δεδομένων (Exploratory Analysis)</h2>
+Το σύνολο δεδομένων περιλαμβάνει ειδήσεις που έχουν συλλεχθεί από τις 3 Δεκεμβρίου του 2015 έως τις 12 Δεκεμβρίου του 2017. Παρατηρώντας το πρώτο γράφημα επιβεβαιώνεται η υπόθεση ότι την περίοδο των εκλογών στην Αμερική υπάρχει έξαρση των ψευδών ειδήσεων. 
+
+<center>
+![News](C:\Users\Victoria\Desktop\election_year.png "Real vs Fake news")
+</center>
+
+Πηγή: https://github.com/iscarff123/FakeRealNewsClassification
+
+Σε αυτό το γράφημα μπάρας φαίνεται η αναλογία της συχνότητας των αληθών και των ψευδών ειδήσεων. Είναι εμφανές ότι οι πραγματικές ειδήσεις ξεπερνούν τις ψευδείς με μία ικανοποιητική διαφορά. Παρόλα αυτά οι ψευδείς ειδήσεις συνεχίζουν να βρίσκονται στο προσκήνιο και να επηρεάζουν την κοινή γνώμη. 
+
+```{r graphics, echo=FALSE}
+# Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+############ Data exploration ##############
+barplot(table(data$category), main = "Data category Distribution",
+        xlab = "Data category",
+        ylab = "Frequency")
+table(data$category)
+```
+Στο παρακάτω γράφημα παρουσιάζεται η συσχέτιση των συχνοτήτων των  λέξεων δηλαδή το ποσοστό εμφάνισης τους σε όλο το σύνολο δεδομένων. Αυτό που μπορεί κανείς να παρατηρήσει με μία πρώτη ματιά είναι ότι υπάρχουν ισχυρές συσχετίσεις ανάμεσα σε ορισμένες λέξεις αλλά στο σύνολο δεν είναι πολλές. Η ισχυρή συσχέτιση τους μπορεί να οφείλεται στο ότι αυτές οι λέξεις εμφανίζονται η μία δίπλα στην άλλη σε μία πρόταση (Hillary Clinton, Donald Trump). 
+
+```{r correlation analysis}
+# Correlation plot
+corrplot(cor(data[,c(5:50)]), 
+         main = "Correlation analysis of the popular words")
+```
+<h2>Ταξινόμηση</h2>
+Οι ταξινομητές που χρησιμοποιήθηκαν ήταν ο **Naive Bayes** και ο **Random Forest**. Το σύνολο δεδομένων (των ψευδών και των πραγματικών ειδήσεων) χωρίστηκε σε σύνολο εκπαίδευσης (train set) και σε σύνολο δοκιμής (test set) με αναλογία 80:20 αντίστοιχα. 
+```{r classification}
+########### Classification ###############
+# Split data into train and test set
+set.seed(210)
+split_data <- createDataPartition(data$category, p = 0.8)[[1]]
+train <- data[split_data,]
+test <- data[-split_data,]
+```
+```{r naive bayes}
+# Naive Bayes Model
+mdl_nb <- naiveBayes(category ~ ., data = train)
+```
+```{r random forest}
+# Random Forest Model
+k <- round(sqrt(ncol(train)-1))
+mdl_rf <- randomForest(formula = category ~ ., 
+                       data = train,
+                       ntree = 100,
+                       mtry = k,
+                       method = 'class')
+
+```
+<h2>Αξιολόγηση</h2>
+```{r prediction}
+# Predicted Values for test set
+test$pred_nb <- predict(mdl_nb, newdata = test)
+test$pred_rf <- predict(mdl_rf, newdata = test, type = 'response')
+```
+<center>
+```{r roc curve}
+# Plot ROC Curve for test set
+prediction(as.numeric(test$pred_nb), as.numeric(test$category)) %>%
+  performance('tpr', 'fpr') %>%
+  plot(col = 'red', lwd = 2)
+
+prediction(as.numeric(test$pred_rf), as.numeric(test$category)) %>%
+  performance('tpr', 'fpr') %>%
+  plot(add = TRUE, col = 'blue', lwd = 2)
+
+legend(0.8, 0.2, legend=c("NB", "RF"),
+       col=c("red", "blue"), lty = 1, cex = 1.2, box.lty = 0)
+```
+</center>
+Στο σχήμα φαίνεται ότι ο Random Forest ξεπέρασε τον Naive Bayes με μεγάλη διαφορά. 
+<h2>Αποτελέσματα</h2>
+Τα αποτελέσματα απεικονίζονται με τη χρήση του πίνακα συνάφειας (confusion matrix). Τέλος, δίνονται σε ένα συνoπτικό πίνακα η ακρίβεια (accuracy) και το μέτρο F1 (F1-score) για κάθε ταξινομητή. 
+```{r confusion matrix}
+# Evaluation Metrics
+# Confusion Matrix for both models
+conf_nb <- confusionMatrix(test$category, test$pred_nb)
+conf_rf <- confusionMatrix(test$category, test$pred_rf)
+
+acc <- c(nb = conf_nb[['overall']]['Accuracy'],
+         rf = conf_rf[['overall']]['Accuracy'])
+precision <- c(nb = conf_nb[['byClass']]['Pos Pred Value'],
+               rf = conf_rf[['byClass']]['Pos Pred Value'])
+recall <- c(nb = conf_nb[['byClass']]['Sensitivity'],
+            rf = conf_rf[['byClass']]['Sensitivity'])
+
+data.frame(Model = c('Naive Bayes', 'Random Forest'),
+           Accuracy = acc,
+           F1_Score = (2 * precision * recall) / (precision + recall),
+           row.names = NULL)
+```
+<h2>Συμπεράσματα και Μελλοντικές προσεγγίσεις</h2>
+Συμπερασματικά, τα αποτελέσματα ανέδειξαν ως καλύτερο ταξινομητή τον "Random Forest" με ποσοστό επιτυχίας 95,8%. 
+Βάσει της παρούσας έρευνας μπορούν να γίνουν ορισμένες συστάσεις. Οι εταιρείες που ασχολούνται με τα μέσα κοινωνικής δικτύωσης θα πρέπει να χρησιμοποιούν μοντέλα για να ταξινομούν τα άρθρα ειδήσεων σε αληθή ή ψευδά. Αυτό θα έχει ως απόρροια την έγκυρη ενημέρωση των χρηστών για τη διάδοση ψευδών πληροφοριών ώστε να μη θυματοποιούνται από τους διάφορους επιτήδειους. Στο πλαίσιο των μελλοντικών προσεγγίσεων θα μπορούσαν να γίνουν τα εξής:
+
+1. Εξερεύνηση περισσότερων συσχετίσεων μεταξύ λέξεων που πιθανόν να υπάρχουν (χρήση μοντέλου λογιστικής παλινδρόμησης)
+2. Δοκιμή άλλων ταξινομητών και παραμέτρων τους
+3. Χρήση της πηγής πληροφόρησης ως προγνωστικό μέσο
+
+<h2>Βιβλιογραφία</h2>
